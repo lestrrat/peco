@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -401,7 +402,7 @@ func NewSmartCaseFilter() *RegexpFilter {
 	return rf
 }
 
-func NewExternalCmdFilter(name string, cmd string, args []string, threshold int, enableSep bool) *ExternalCmdFilter {
+func NewExternalCmdFilter(name string, cmd string, args []string, threshold int, enableSep bool, returnsLineID bool) *ExternalCmdFilter {
 	if len(args) == 0 {
 		args = []string{"$QUERY"}
 	}
@@ -416,6 +417,7 @@ func NewExternalCmdFilter(name string, cmd string, args []string, threshold int,
 		enableSep:       enableSep,
 		name:            name,
 		outCh:           pipeline.OutputChannel(make(chan interface{})),
+		returnsLineID:   returnsLineID,
 		thresholdBufsiz: threshold,
 	}
 }
@@ -427,6 +429,7 @@ func (ecf ExternalCmdFilter) Clone() LineFilter {
 		enableSep:       ecf.enableSep,
 		name:            ecf.name,
 		outCh:           pipeline.OutputChannel(make(chan interface{})),
+		returnsLineID:   ecf.returnsLineID,
 		thresholdBufsiz: ecf.thresholdBufsiz,
 	}
 }
@@ -515,9 +518,16 @@ func (ecf *ExternalCmdFilter) launchExternalCmd(ctx context.Context, buf []Line)
 		pdebug.Printf("Executing command %s %v", cmd.Path, cmd.Args)
 	}
 
+	lines := make(map[uint64]Line)
 	inbuf := &bytes.Buffer{}
 	for _, l := range buf {
-		inbuf.WriteString(l.DisplayString() + "\n")
+		inbuf.WriteString(l.DisplayString())
+		if ecf.returnsLineID {
+			inbuf.WriteByte(0)
+			inbuf.WriteString(strconv.FormatUint(l.ID(), 10))
+			lines[l.ID()] = l
+		}
+		inbuf.WriteByte('\n')
 	}
 
 	cmd.Stdin = inbuf
@@ -540,11 +550,26 @@ func (ecf *ExternalCmdFilter) launchExternalCmd(ctx context.Context, buf []Line)
 		for {
 			b, _, err := rdr.ReadLine()
 			if len(b) > 0 {
-				// TODO: need to redo the spec for custom matchers
-				// This is the ONLY location where we need to actually
-				// RECREATE a RawLine, and thus the only place where
-				// ctx.enableSep is required.
-				cmdCh <- NewMatchedLine(NewRawLine(string(b), ecf.enableSep), nil)
+				switch {
+				case ecf.returnsLineID:
+					// Lookup the Line from its ID
+					id, err := strconv.ParseUint(string(b), 10, 64)
+					if err != nil {
+						continue
+					}
+
+					l, ok := lines[id]
+					if !ok {
+						continue
+					}
+
+					cmdCh <- NewMatchedLine(l, nil)
+				default:
+					// This is the ONLY location where we need to actually
+					// RECREATE a RawLine, and thus the only place where
+					// ctx.enableSep is required.
+					cmdCh <- NewMatchedLine(NewRawLine(string(b), ecf.enableSep), nil)
+				}
 			}
 			if err != nil {
 				break

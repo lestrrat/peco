@@ -467,7 +467,7 @@ func (p *Peco) populateFilters() error {
 	p.filters.Add(NewRegexpFilter())
 
 	for name, c := range p.config.CustomFilter {
-		f := NewExternalCmdFilter(name, c.Cmd, c.Args, c.BufferThreshold, p.enableSep)
+		f := NewExternalCmdFilter(name, c.Cmd, c.Args, c.BufferThreshold, p.enableSep, c.ReturnsLineID)
 		p.filters.Add(f)
 	}
 
