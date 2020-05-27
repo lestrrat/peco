@@ -1,4 +1,4 @@
-package peco
+package ui_test
 
 import (
 	"testing"
@@ -6,19 +6,21 @@ import (
 
 	"github.com/mattn/go-runewidth"
 	"github.com/nsf/termbox-go"
+	"github.com/peco/peco/internal/mock"
+	"github.com/peco/peco/ui"
 )
 
 func TestLayoutType(t *testing.T) {
 	layouts := []struct {
-		value    LayoutType
+		value    ui.LayoutType
 		expectOK bool
 	}{
-		{LayoutTypeTopDown, true},
-		{LayoutTypeBottomUp, true},
+		{ui.LayoutTypeTopDown, true},
+		{ui.LayoutTypeBottomUp, true},
 		{"foobar", false},
 	}
 	for _, l := range layouts {
-		valid := IsValidLayoutType(l.value)
+		valid := ui.IsValidLayoutType(l.value)
 		if valid != l.expectOK {
 			t.Errorf("LayoutType %s, expected IsValidLayoutType to return %t, but got %t",
 				l.value,
@@ -30,22 +32,22 @@ func TestLayoutType(t *testing.T) {
 }
 
 func TestPrintScreen(t *testing.T) {
-	screen := NewDummyScreen()
+	screen := mock.NewScreen()
 
 	makeVerifier := func(initX, initY int, fill bool) func(string) {
 		return func(msg string) {
-			screen.interceptor.reset()
+			screen.Interceptor.Reset()
 			t.Logf("Checking printScreen(%d, %d, %s, %t)", initX, initY, msg, fill)
 			width := utf8.RuneCountInString(msg)
-			screen.Print(PrintArgs{
-				X:    initX,
-				Y:    initY,
-				Fg:   termbox.ColorDefault,
-				Bg:   termbox.ColorDefault,
-				Msg:  msg,
-				Fill: fill,
-			})
-			events := screen.interceptor.events["SetCell"]
+			screen.Start().
+				X(initX).
+				Y(initY).
+				Fg(termbox.ColorDefault).
+				Bg(termbox.ColorDefault).
+				Msg(msg).
+				Fill(fill).
+				Print()
+			events := screen.Interceptor.Events["SetCell"]
 			if !fill {
 				if len(events) != width {
 					t.Errorf("Expected %d SetCell events, got %d",
@@ -81,17 +83,19 @@ func TestPrintScreen(t *testing.T) {
 }
 
 func TestStatusBar(t *testing.T) {
-	screen := NewDummyScreen()
-	st := NewStatusBar(screen, AnchorBottom, 0, NewStyleSet())
+	screen := mock.NewScreen()
+	st := ui.NewStatusBar(screen, ui.AnchorBottom, 0, ui.NewStyleSet())
 	st.PrintStatus("Hello, World!", 0)
 
-	events := screen.interceptor.events
+	events := screen.Interceptor.Events
 	if l := len(events["Flush"]); l != 1 {
 		t.Errorf("Expected 1 Flush event, got %d", l)
 		return
 	}
 }
 
+// TODO: avoid using private methods
+/*
 func TestMergeAttribute(t *testing.T) {
 	colors := stringToFg
 
@@ -127,3 +131,4 @@ func TestMergeAttribute(t *testing.T) {
 	}
 
 }
+*/

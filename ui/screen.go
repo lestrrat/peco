@@ -1,10 +1,11 @@
-package peco
+package ui
 
 import (
 	"context"
+	"sync"
 	"unicode/utf8"
 
-	pdebug "github.com/lestrrat-go/pdebug"
+	pdebug "github.com/lestrrat-go/pdebug/v2"
 	"github.com/mattn/go-runewidth"
 	"github.com/nsf/termbox-go"
 	"github.com/pkg/errors"
@@ -27,7 +28,7 @@ func NewTermbox() *Termbox {
 
 func (t *Termbox) Close() error {
 	if pdebug.Enabled {
-		pdebug.Printf("Termbox: Close")
+		pdebug.Printf(context.TODO(), "Termbox: Close")
 	}
 	termbox.Interrupt()
 	termbox.Close()
@@ -75,7 +76,7 @@ func (t *Termbox) PollEvent(ctx context.Context) chan termbox.Event {
 				return
 			case <-t.suspendCh:
 				if pdebug.Enabled {
-					pdebug.Printf("poll event suspended!")
+					pdebug.Printf(ctx, "poll event suspended!")
 				}
 				t.Close()
 			}
@@ -83,7 +84,7 @@ func (t *Termbox) PollEvent(ctx context.Context) chan termbox.Event {
 	}()
 
 	go func() {
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 		defer func() { close(evCh) }()
 
 		for {
@@ -97,7 +98,7 @@ func (t *Termbox) PollEvent(ctx context.Context) chan termbox.Event {
 			case <-ctx.Done():
 				return
 			case replyCh := <-t.resumeCh:
-				t.Init()
+				_ = t.Init()
 				close(replyCh)
 			}
 		}
@@ -140,7 +141,60 @@ func (t *Termbox) Size() (int, int) {
 	return termbox.Size()
 }
 
-type PrintArgs struct {
+type PrintCtx struct {
+	screen Screen
+	args   *printArgs
+}
+
+func NewPrintCtx(s Screen) *PrintCtx {
+	return &PrintCtx{
+		screen: s,
+		args: getPrintArgs(),
+	}
+}
+
+func (ctx *PrintCtx) X(v int) *PrintCtx {
+	ctx.args.X = v
+	return ctx
+}
+
+func (ctx *PrintCtx) XOffset(v int) *PrintCtx {
+	ctx.args.XOffset = v
+	return ctx
+}
+
+func (ctx *PrintCtx) Y(v int) *PrintCtx {
+	ctx.args.Y = v
+	return ctx
+}
+
+func (ctx *PrintCtx) Fg(v termbox.Attribute) *PrintCtx {
+	ctx.args.Fg = v
+	return ctx
+}
+
+func (ctx *PrintCtx) Bg(v termbox.Attribute) *PrintCtx {
+	ctx.args.Bg = v
+	return ctx
+}
+
+func (ctx *PrintCtx) Msg(v string) *PrintCtx {
+	ctx.args.Msg = v
+	return ctx
+}
+
+func (ctx *PrintCtx) Fill(v bool) *PrintCtx {
+	ctx.args.Fill = v
+	return ctx
+}
+
+func (ctx *PrintCtx) Print() int {
+	n := screenPrint(ctx.screen, ctx.args)
+	releasePrintArgs(ctx.args)
+	return n
+}
+
+type printArgs struct {
 	X       int
 	XOffset int
 	Y       int
@@ -150,11 +204,37 @@ type PrintArgs struct {
 	Fill    bool
 }
 
-func (t *Termbox) Print(args PrintArgs) int {
-	return screenPrint(t, args)
+var printArgsPool = sync.Pool{
+	New: allocPrintArgs,
 }
 
-func screenPrint(t Screen, args PrintArgs) int {
+func allocPrintArgs() interface{} {
+	return &printArgs{}
+}
+
+func getPrintArgs() *printArgs {
+	return printArgsPool.Get().(*printArgs)
+}
+
+func releasePrintArgs(args *printArgs) {
+	args.X = 0
+	args.XOffset = 0
+	args.Y = 0
+	args.Fg = termbox.Attribute(0)
+	args.Bg = termbox.Attribute(0)
+	args.Msg = ""
+	args.Fill = false
+	printArgsPool.Put(args)
+}
+
+func (t *Termbox) Start() *PrintCtx {
+	return &PrintCtx{
+		screen: t,
+		args:   getPrintArgs(),
+	}
+}
+
+func screenPrint(t Screen, args *printArgs) int {
 	var written int
 
 	bg := args.Bg

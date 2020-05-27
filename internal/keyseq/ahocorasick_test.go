@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/nsf/termbox-go"
+	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 )
 
 func checkNode(t *testing.T, node Node, size int, data nodeData) {
@@ -45,19 +47,25 @@ func validData(pattern KeyList, value interface{}, failure Node) nodeData {
 	}
 }
 
-func newTestMatcher() *Matcher {
+func newTestMatcher() (*Matcher, error) {
 	m := NewMatcher()
 	m.Add(KeyList{Key{0, termbox.KeyCtrlA, rune(0)}, Key{0, termbox.KeyCtrlB, rune(0)}}, 2)
 	m.Add(KeyList{Key{0, termbox.KeyCtrlB, rune(0)}, Key{0, termbox.KeyCtrlC, rune(0)}}, 4)
 	m.Add(KeyList{Key{0, termbox.KeyCtrlB, rune(0)}, Key{0, termbox.KeyCtrlA, rune(0)}, Key{0, termbox.KeyCtrlB, rune(0)}}, 6)
 	m.Add(KeyList{Key{0, termbox.KeyCtrlD, rune(0)}}, 7)
 	m.Add(KeyList{Key{0, termbox.KeyCtrlA, rune(0)}, Key{0, termbox.KeyCtrlB, rune(0)}, Key{0, termbox.KeyCtrlC, rune(0)}, Key{0, termbox.KeyCtrlD, rune(0)}, Key{0, termbox.KeyCtrlE, rune(0)}}, 10)
-	m.Compile()
-	return m
+	if err := m.Compile(); err != nil {
+		return nil, errors.Wrap(err, `failed to compile`)
+	}
+	return m, nil
 }
 
 func TestTree(t *testing.T) {
-	m := newTestMatcher()
+	m, err := newTestMatcher()
+	if !assert.NoError(t, err, `creating new matcher should succeed`) {
+		return
+	}
+
 	// Check tree structure.
 	r := m.Root()
 	checkNode(t, r, 3, invalidData(r))
@@ -81,32 +89,4 @@ func TestTree(t *testing.T) {
 	checkNode(t, n9, 1, invalidData(n7))
 	n10 := n9.Get(NewKeyFromKey(termbox.KeyCtrlE))
 	checkNode(t, n10, 0, validData(KeyList{NewKeyFromKey(termbox.KeyCtrlA), NewKeyFromKey(termbox.KeyCtrlB), NewKeyFromKey(termbox.KeyCtrlC), NewKeyFromKey(termbox.KeyCtrlD), NewKeyFromKey(termbox.KeyCtrlE)}, 10, r))
-}
-
-func assertMatches(t *testing.T, exp, act []Match) {
-	if len(act) != len(exp) {
-		t.Errorf("[]Match length is not %d (%d)", len(exp), len(act))
-		t.Logf("  expected: %v", exp)
-		t.Logf("  actually: %v", act)
-	}
-	for i, e := range exp {
-		dump := false
-		a := act[i]
-		if a.Index != e.Index {
-			t.Errorf("Index not matched at #%d\n", i)
-			dump = true
-		}
-		if !a.Pattern.Equals(e.Pattern) {
-			t.Errorf("Pattern not matched at #%d\n", i)
-			dump = true
-		}
-		if a.Value != e.Value {
-			t.Errorf("Value not matched at #%d\n", i)
-			dump = true
-		}
-		if dump {
-			t.Logf("  expected: %+v", e)
-			t.Logf("  actually: %+v", a)
-		}
-	}
 }

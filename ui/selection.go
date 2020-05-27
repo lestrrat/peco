@@ -1,9 +1,26 @@
-package peco
+package ui
 
 import (
 	"github.com/google/btree"
 	"github.com/peco/peco/line"
 )
+
+func (s RangeStart) Valid() bool {
+	return s.valid
+}
+
+func (s RangeStart) Value() int {
+	return s.val
+}
+
+func (s *RangeStart) SetValue(n int) {
+	s.val = n
+	s.valid = true
+}
+
+func (s *RangeStart) Reset() {
+	s.valid = false
+}
 
 // NewSelection creates a new empty Selection
 func NewSelection() *Selection {

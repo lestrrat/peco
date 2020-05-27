@@ -18,13 +18,17 @@ import (
 	"context"
 
 	"github.com/google/btree"
-	"github.com/lestrrat-go/pdebug"
+	"github.com/lestrrat-go/pdebug/v2"
+	"github.com/peco/peco/buffer"
 	"github.com/peco/peco/filter"
 	"github.com/peco/peco/hub"
+	"github.com/peco/peco/internal/location"
 	"github.com/peco/peco/internal/util"
 	"github.com/peco/peco/line"
 	"github.com/peco/peco/pipeline"
+	"github.com/peco/peco/query"
 	"github.com/peco/peco/sig"
+	"github.com/peco/peco/ui"
 	"github.com/pkg/errors"
 )
 
@@ -38,9 +42,11 @@ func (e errIgnorable) Ignorable() bool { return true }
 func (e errIgnorable) Cause() error {
 	return e.err
 }
+
 func (e errIgnorable) Error() string {
 	return e.err.Error()
 }
+
 func makeIgnorable(err error) error {
 	return &errIgnorable{err: err}
 }
@@ -115,26 +121,35 @@ func New() *Peco {
 		Stderr:            os.Stderr,
 		Stdin:             os.Stdin,
 		Stdout:            os.Stdout,
-		currentLineBuffer: NewMemoryBuffer(), // XXX revisit this
+		currentLineBuffer: buffer.NewMemory(), // XXX revisit this
 		idgen:             newIDGen(),
+		query:             query.New(),
 		queryExecDelay:    50 * time.Millisecond,
 		readyCh:           make(chan struct{}),
-		screen:            NewTermbox(),
-		selection:         NewSelection(),
+		screen:            ui.NewTermbox(),
+		selection:         ui.NewSelection(),
 		maxScanBufferSize: bufio.MaxScanTokenSize,
 	}
+}
+
+func (p *Peco) AnchorPosition() int {
+	return p.anchor.AnchorPosition()
 }
 
 func (p *Peco) Ready() <-chan struct{} {
 	return p.readyCh
 }
 
-func (p *Peco) Screen() Screen {
+func (p *Peco) SelectionPrefix() string {
+	return p.selectionPrefix
+}
+
+func (p *Peco) Screen() ui.Screen {
 	return p.screen
 }
 
-func (p *Peco) Styles() *StyleSet {
-	return &p.styles
+func (p *Peco) Styles() *ui.StyleSet {
+	return p.styles
 }
 
 func (p *Peco) Prompt() string {
@@ -149,7 +164,7 @@ func (p *Peco) LayoutType() string {
 	return p.layoutType
 }
 
-func (p *Peco) Location() *Location {
+func (p *Peco) Location() *location.Location {
 	return &p.location
 }
 
@@ -165,28 +180,11 @@ func (p *Peco) SetResultCh(ch chan line.Line) {
 	p.resultCh = ch
 }
 
-func (p *Peco) Selection() *Selection {
+func (p *Peco) Selection() *ui.Selection {
 	return p.selection
 }
 
-func (s RangeStart) Valid() bool {
-	return s.valid
-}
-
-func (s RangeStart) Value() int {
-	return s.val
-}
-
-func (s *RangeStart) SetValue(n int) {
-	s.val = n
-	s.valid = true
-}
-
-func (s *RangeStart) Reset() {
-	s.valid = false
-}
-
-func (p *Peco) SelectionRangeStart() *RangeStart {
+func (p *Peco) SelectionRangeStart() *ui.RangeStart {
 	return &p.selectionRangeStart
 }
 
@@ -208,7 +206,7 @@ func (p *Peco) SetSingleKeyJumpMode(b bool) {
 
 func (p *Peco) ToggleSingleKeyJumpMode() {
 	p.singleKeyJumpMode = !p.singleKeyJumpMode
-	go p.Hub().SendDraw(context.Background(), &DrawOptions{DisableCache: true})
+	go p.Hub().SendDraw(context.Background(), ui.WithLineCache(false))
 }
 
 func (p *Peco) SingleKeyJumpIndex(ch rune) (uint, bool) {
@@ -224,15 +222,15 @@ func (p *Peco) Filters() *filter.Set {
 	return &p.filters
 }
 
-func (p *Peco) Query() *Query {
-	return &p.query
+func (p *Peco) Query() *query.Query {
+	return p.query
 }
 
 func (p *Peco) QueryExecDelay() time.Duration {
 	return p.queryExecDelay
 }
 
-func (p *Peco) Caret() *Caret {
+func (p *Peco) Caret() *ui.Caret {
 	return &p.caret
 }
 
@@ -244,9 +242,9 @@ func (p *Peco) Err() error {
 	return p.err
 }
 
-func (p *Peco) Exit(err error) {
+func (p *Peco) Exit(ctx context.Context, err error) {
 	if pdebug.Enabled {
-		g := pdebug.Marker("Peco.Exit (err = %s)", err)
+		g := pdebug.Marker(ctx, "Peco.Exit (err = %s)", err)
 		defer g.End()
 	}
 	p.err = err
@@ -259,9 +257,9 @@ func (p *Peco) Keymap() Keymap {
 	return p.keymap
 }
 
-func (p *Peco) Setup() (err error) {
+func (p *Peco) Setup(ctx context.Context) (err error) {
 	if pdebug.Enabled {
-		g := pdebug.Marker("Peco.Setup").BindError(&err)
+		g := pdebug.Marker(ctx, "Peco.Setup").BindError(&err)
 		defer g.End()
 	}
 
@@ -293,23 +291,29 @@ func (p *Peco) Setup() (err error) {
 	return nil
 }
 
-func (p *Peco) selectOneAndExitIfPossible() {
+func (p *Peco) selectOneAndExitIfPossible(ctx context.Context) {
 	// TODO: mutex
 	// If we have only one line, we just want to bail out
 	// printing that one line as the result
 	if b := p.CurrentLineBuffer(); b.Size() == 1 {
 		if l, err := b.LineAt(0); err == nil {
 			p.resultCh = make(chan line.Line)
-			p.Exit(errCollectResults{})
-			p.resultCh <- l
-			close(p.resultCh)
+			p.Exit(ctx, errCollectResults{})
+
+			select {
+			case <-ctx.Done():
+				return
+			case p.resultCh <- l:
+				close(p.resultCh)
+			}
+
 		}
 	}
 }
 
 func (p *Peco) Run(ctx context.Context) (err error) {
 	if pdebug.Enabled {
-		g := pdebug.Marker("Peco.Run").BindError(&err)
+		g := pdebug.Marker(ctx, "Peco.Run").BindError(&err)
 		defer g.End()
 	}
 
@@ -317,7 +321,7 @@ func (p *Peco) Run(ctx context.Context) (err error) {
 	var readyOnce sync.Once
 	defer readyOnce.Do(func() { close(p.readyCh) })
 
-	if err := p.Setup(); err != nil {
+	if err := p.Setup(ctx); err != nil {
 		return errors.Wrap(err, "failed to setup peco")
 	}
 
@@ -326,9 +330,7 @@ func (p *Peco) Run(ctx context.Context) (err error) {
 	ctx, _cancel = context.WithCancel(ctx)
 	cancel := func() {
 		_cancelOnce.Do(func() {
-			if pdebug.Enabled {
-				pdebug.Printf("Peco.Run cancel called")
-			}
+			pdebug.Printf(ctx, "Peco.Run cancel called")
 			_cancel()
 		})
 	}
@@ -340,10 +342,10 @@ func (p *Peco) Run(ctx context.Context) (err error) {
 	p.cancelFunc = cancel
 
 	sigH := sig.New(sig.SigReceivedHandlerFunc(func(sig os.Signal) {
-		p.Exit(errors.New("received signal: " + sig.String()))
+		p.Exit(ctx, errors.New("received signal: "+sig.String()))
 	}))
 
-	go sigH.Loop(ctx, cancel)
+	go func() { _ = sigH.Loop(ctx, cancel) }()
 
 	// SetupSource is done AFTER other components are ready, otherwise
 	// we can't draw onto the screen while we are reading a really big
@@ -360,10 +362,10 @@ func (p *Peco) Run(ctx context.Context) (err error) {
 		// screen.Init must be called within Run() because we
 		// want to make sure to call screen.Close() after getting
 		// out of Run()
-		p.screen.Init()
-		go NewInput(p, p.Keymap(), p.screen.PollEvent(ctx)).Loop(ctx, cancel)
-		go NewView(p).Loop(ctx, cancel)
-		go NewFilter(p).Loop(ctx, cancel)
+		_ = p.screen.Init()
+		go func() { _ = NewInput(p, p.Keymap(), p.screen.PollEvent(ctx)).Loop(ctx, cancel) }()
+		go func() { _ = NewView(p).Loop(ctx, cancel) }()
+		go func() { _ = NewFilter(p).Loop(ctx, cancel) }()
 	}()
 	defer p.screen.Close()
 
@@ -373,7 +375,7 @@ func (p *Peco) Run(ctx context.Context) (err error) {
 	}
 
 	if pdebug.Enabled {
-		pdebug.Printf("peco is now ready, go go go!")
+		pdebug.Printf(ctx, "peco is now ready, go go go!")
 	}
 
 	// If this is enabled, we need to check if we have 1 line only
@@ -385,7 +387,7 @@ func (p *Peco) Run(ctx context.Context) (err error) {
 			// a line, where as SetupDone waits until we're completely
 			// done reading the input
 			<-p.source.SetupDone()
-			p.selectOneAndExitIfPossible()
+			p.selectOneAndExitIfPossible(ctx)
 		}()
 	}
 
@@ -428,7 +430,7 @@ func (p *Peco) parseCommandLine(opts *CLIOptions, args *[]string, argv []string)
 	}
 
 	if opts.OptHelp {
-		p.Stdout.Write(opts.help())
+		_, _ = p.Stdout.Write(opts.help())
 		return makeIgnorable(errors.New("user asked to show help message"))
 	}
 
@@ -450,7 +452,7 @@ func (p *Peco) parseCommandLine(opts *CLIOptions, args *[]string, argv []string)
 
 func (p *Peco) SetupSource(ctx context.Context) (s *Source, err error) {
 	if pdebug.Enabled {
-		g := pdebug.Marker("Peco.SetupSource").BindError(&err)
+		g := pdebug.Marker(ctx, "Peco.SetupSource").BindError(&err)
 		defer g.End()
 	}
 
@@ -464,13 +466,13 @@ func (p *Peco) SetupSource(ctx context.Context) (s *Source, err error) {
 			return nil, errors.Wrap(err, "failed to open file for input")
 		}
 		if pdebug.Enabled {
-			pdebug.Printf("Using %s as input", p.args[1])
+			pdebug.Printf(ctx, "Using %s as input", p.args[1])
 		}
 		in = f
 		filename = p.args[1]
 	case !util.IsTty(p.Stdin):
 		if pdebug.Enabled {
-			pdebug.Printf("Using p.Stdin as input")
+			pdebug.Printf(ctx, "Using p.Stdin as input")
 		}
 		in = p.Stdin
 		filename = `-`
@@ -487,7 +489,7 @@ func (p *Peco) SetupSource(ctx context.Context) (s *Source, err error) {
 
 	// Block until we receive something from `in`
 	if pdebug.Enabled {
-		pdebug.Printf("Blocking until we read something in source...")
+		pdebug.Printf(ctx, "Blocking until we read something in source...")
 	}
 
 	go src.Setup(ctx, p)
@@ -512,7 +514,7 @@ func (p *Peco) ApplyConfig(opts CLIOptions) error {
 		if v := p.config.Layout; v != "" {
 			p.layoutType = v
 		} else {
-			p.layoutType = DefaultLayoutType
+			p.layoutType = ui.DefaultLayoutType
 		}
 	}
 
@@ -613,15 +615,23 @@ func (p *Peco) populateSingleKeyJump() error {
 }
 
 func (p *Peco) populateFilters() error {
-	p.filters.Add(filter.NewIgnoreCase())
-	p.filters.Add(filter.NewCaseSensitive())
-	p.filters.Add(filter.NewSmartCase())
-	p.filters.Add(filter.NewRegexp())
-	p.filters.Add(filter.NewFuzzy())
+	filters := []filter.Filter{
+		filter.NewIgnoreCase(),
+		filter.NewCaseSensitive(),
+		filter.NewSmartCase(),
+		filter.NewRegexp(),
+		filter.NewFuzzy(),
+	}
 
 	for name, c := range p.config.CustomFilter {
 		f := filter.NewExternalCmd(name, c.Cmd, c.Args, c.BufferThreshold, p.idgen, p.enableSep)
-		p.filters.Add(f)
+		filters = append(filters, f)
+	}
+
+	for _, f := range filters {
+		if err := p.filters.Add(f); err != nil {
+			return errors.Wrap(err, `failed to add filter`)
+		}
 	}
 
 	return nil
@@ -642,17 +652,17 @@ func (p *Peco) populateStyles() error {
 	return nil
 }
 
-func (p *Peco) CurrentLineBuffer() Buffer {
+func (p *Peco) CurrentLineBuffer() buffer.Buffer {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	return p.currentLineBuffer
 }
 
-func (p *Peco) SetCurrentLineBuffer(b Buffer) {
+func (p *Peco) SetCurrentLineBuffer(b buffer.Buffer) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	if pdebug.Enabled {
-		g := pdebug.Marker("Peco.SetCurrentLineBuffer %s", reflect.TypeOf(b).String())
+		g := pdebug.Marker(context.TODO(), "Peco.SetCurrentLineBuffer %s", reflect.TypeOf(b).String())
 		defer g.End()
 	}
 	p.currentLineBuffer = b
@@ -663,9 +673,9 @@ func (p *Peco) ResetCurrentLineBuffer() {
 	p.SetCurrentLineBuffer(p.source)
 }
 
-func (p *Peco) sendQuery(ctx context.Context, q string, nextFunc func()) {
+func (p *Peco) sendQuery(ctx context.Context, q string, nextFunc func(context.Context)) {
 	if pdebug.Enabled {
-		g := pdebug.Marker("sending query to filter goroutine (q=%v, isInfinite=%t)", q, p.source.IsInfinite())
+		g := pdebug.Marker(ctx, "sending query to filter goroutine (q=%v, isInfinite=%t)", q, p.source.IsInfinite())
 		defer g.End()
 	}
 
@@ -675,14 +685,14 @@ func (p *Peco) sendQuery(ctx context.Context, q string, nextFunc func()) {
 		// something like it
 		p.Hub().SendQuery(ctx, q)
 		if nextFunc != nil {
-			time.AfterFunc(time.Second, nextFunc)
+			time.AfterFunc(time.Second, func() { nextFunc(ctx) })
 		}
 	} else {
 		// No delay, execute immediately
 		p.Hub().Batch(context.Background(), func(ctx context.Context) {
 			p.Hub().SendQuery(ctx, q)
 			if nextFunc != nil {
-				nextFunc()
+				nextFunc(ctx)
 			}
 		}, false)
 	}
@@ -693,9 +703,9 @@ func (p *Peco) sendQuery(ctx context.Context, q string, nextFunc func()) {
 //
 // if nextFunc is non-nil, then nextFunc is executed after the query is
 // executed
-func (p *Peco) ExecQuery(nextFunc func()) bool {
+func (p *Peco) ExecQuery(nextFunc func(context.Context)) bool {
 	if pdebug.Enabled {
-		g := pdebug.Marker("Peco.ExecQuery")
+		g := pdebug.Marker(context.TODO(), "Peco.ExecQuery")
 		defer g.End()
 	}
 
@@ -705,7 +715,7 @@ func (p *Peco) ExecQuery(nextFunc func()) bool {
 	case <-p.Ready():
 	default:
 		if pdebug.Enabled {
-			pdebug.Printf("peco is not ready yet, ignoring.")
+			pdebug.Printf(context.TODO(), "peco is not ready yet, ignoring.")
 		}
 		return false
 	}
@@ -715,14 +725,14 @@ func (p *Peco) ExecQuery(nextFunc func()) bool {
 	q := p.Query()
 	if q.Len() <= 0 {
 		if pdebug.Enabled {
-			pdebug.Printf("empty query, reset buffer")
+			pdebug.Printf(context.TODO(), "empty query, reset buffer")
 		}
 		p.ResetCurrentLineBuffer()
 
 		hub.Batch(context.Background(), func(ctx context.Context) {
-			hub.SendDraw(ctx, &DrawOptions{DisableCache: true})
+			hub.SendDraw(ctx, ui.WithLineCache(false))
 			if nextFunc != nil {
-				nextFunc()
+				nextFunc(ctx)
 			}
 		}, false)
 		return true
@@ -731,7 +741,7 @@ func (p *Peco) ExecQuery(nextFunc func()) bool {
 	delay := p.QueryExecDelay()
 	if delay <= 0 {
 		if pdebug.Enabled {
-			pdebug.Printf("sending query (immediate)")
+			pdebug.Printf(context.TODO(), "sending query (immediate)")
 		}
 
 		p.sendQuery(context.Background(), q.String(), nextFunc)
@@ -743,7 +753,7 @@ func (p *Peco) ExecQuery(nextFunc func()) bool {
 
 	if p.queryExecTimer != nil {
 		if pdebug.Enabled {
-			pdebug.Printf("timer is non-nil")
+			pdebug.Printf(context.TODO(), "timer is non-nil")
 		}
 		return true
 	}
@@ -751,16 +761,16 @@ func (p *Peco) ExecQuery(nextFunc func()) bool {
 	// Wait $delay millisecs before sending the query
 	// if a new input comes in, batch them up
 	if pdebug.Enabled {
-		pdebug.Printf("sending query (with delay)")
+		pdebug.Printf(context.TODO(), "sending query (with delay)")
 	}
 	p.queryExecTimer = time.AfterFunc(delay, func() {
 		if pdebug.Enabled {
-			pdebug.Printf("delayed query sent")
+			pdebug.Printf(context.TODO(), "delayed query sent")
 		}
 		p.sendQuery(context.Background(), q.String(), nextFunc)
 
 		if pdebug.Enabled {
-			pdebug.Printf("delayed query executed")
+			pdebug.Printf(context.TODO(), "delayed query executed")
 		}
 
 		p.queryExecMutex.Lock()
@@ -773,7 +783,7 @@ func (p *Peco) ExecQuery(nextFunc func()) bool {
 
 func (p *Peco) PrintResults() {
 	if pdebug.Enabled {
-		g := pdebug.Marker("Peco.PrintResults")
+		g := pdebug.Marker(context.TODO(), "Peco.PrintResults")
 		defer g.End()
 	}
 	selection := p.Selection()
@@ -794,7 +804,7 @@ func (p *Peco) PrintResults() {
 	var buf bytes.Buffer
 
 	if pdebug.Enabled {
-		pdebug.Printf("--print-query was %t", p.printQuery)
+		pdebug.Printf(context.TODO(), "--print-query was %t", p.printQuery)
 	}
 	if p.printQuery {
 		buf.WriteString(p.Query().String())
@@ -804,5 +814,5 @@ func (p *Peco) PrintResults() {
 		buf.WriteString(line.Output())
 		buf.WriteByte('\n')
 	}
-	p.Stdout.Write(buf.Bytes())
+	_, _ = p.Stdout.Write(buf.Bytes())
 }

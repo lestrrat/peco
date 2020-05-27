@@ -8,14 +8,16 @@ import (
 	"time"
 
 	"context"
+
 	termbox "github.com/nsf/termbox-go"
+	"github.com/peco/peco/ui"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestIssue212_SanityCheck(t *testing.T) {
 	state := newPeco()
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
@@ -35,8 +37,7 @@ func TestIssue212_SanityCheck(t *testing.T) {
 		return
 	}
 
-	defstyle := StyleSet{}
-	defstyle.Init()
+	defstyle := ui.NewStyleSet()
 	if !assert.Equal(t, state.config.Style, defstyle, "should be default style") {
 		return
 	}
@@ -53,13 +54,13 @@ func TestIssue212_SanityCheck(t *testing.T) {
 	fn := f.Name()
 	defer os.Remove(fn)
 
-	io.WriteString(f, `{
+	_, _ = io.WriteString(f, `{
     "Layout": "bottom-up"
 }`)
 	f.Close()
 
 	state = newPeco()
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 
 	<-state.Ready()
 
@@ -97,7 +98,7 @@ func TestIssue345(t *testing.T) {
 	state.Argv = append(state.Argv, []string{"--rcfile", cfg}...)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()

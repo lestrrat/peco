@@ -1,15 +1,18 @@
-package peco
+package ui
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/lestrrat-go/pdebug"
+	"github.com/lestrrat-go/pdebug/v2"
 	"github.com/mattn/go-runewidth"
 	"github.com/nsf/termbox-go"
+	"github.com/peco/peco/buffer"
+	"github.com/peco/peco/internal/location"
 	"github.com/peco/peco/line"
 	"github.com/pkg/errors"
 )
@@ -81,21 +84,16 @@ func NewUserPrompt(screen Screen, anchor VerticalAnchor, anchorOffset int, promp
 }
 
 // Draw draws the query prompt
-func (u UserPrompt) Draw(state *Peco) {
+func (u UserPrompt) Draw(ctx context.Context, state State) {
 	if pdebug.Enabled {
-		g := pdebug.Marker("UserPrompt.Draw")
+		g := pdebug.Marker(ctx, "UserPrompt.Draw")
 		defer g.End()
 	}
 
 	location := u.AnchorPosition()
 
 	// print "QUERY>"
-	u.screen.Print(PrintArgs{
-		Y:   location,
-		Fg:  u.styles.Basic.fg,
-		Bg:  u.styles.Basic.bg,
-		Msg: u.prompt,
-	})
+	u.screen.Start().Y(location).Fg(u.styles.Basic.fg).Bg(u.styles.Basic.bg).Msg(u.prompt).Print()
 
 	c := state.Caret()
 	if c.Pos() <= 0 { // XXX Do we really need this?
@@ -117,48 +115,44 @@ func (u UserPrompt) Draw(state *Peco) {
 
 	switch ql {
 	case 0:
-		u.screen.Print(PrintArgs{
-			X:    u.promptLen,
-			Y:    location,
-			Fg:   fg,
-			Bg:   bg,
-			Fill: true,
-		})
+		u.screen.Start().
+			X(u.promptLen).
+			Y(location).
+			Fg(fg).
+			Bg(bg).
+			Fill(true).
+			Print()
 		posX = u.promptLen + 1
-		u.screen.Print(PrintArgs{
-			X:    u.promptLen + 1,
-			Y:    location,
-			Bg:   bg | termbox.AttrReverse,
-			Fg:   fg | termbox.AttrReverse,
-			Msg:  " ",
-			Fill: false,
-		})
+		u.screen.Start().
+			X(u.promptLen + 1).
+			Y(location).
+			Fg(fg | termbox.AttrReverse).
+			Bg(bg | termbox.AttrReverse).
+			Msg(" ").
+			Print()
 	case c.Pos():
 		// the entire string + the caret after the string
-		u.screen.Print(PrintArgs{
-			X:    u.promptLen,
-			Y:    location,
-			Fg:   fg,
-			Bg:   bg,
-			Fill: true,
-		})
-		u.screen.Print(PrintArgs{
-			X:    u.promptLen + 1,
-			Y:    location,
-			Fg:   fg,
-			Bg:   bg,
-			Msg:  qs,
-			Fill: false,
-		})
+		u.screen.Start().
+			X(u.promptLen).
+			Y(location).Fg(fg).
+			Bg(bg).
+			Fill(true).
+			Print()
+		u.screen.Start().
+			X(u.promptLen + 1).
+			Y(location).Fg(fg).
+			Bg(bg).
+			Msg(qs).
+			Print()
+
 		posX = u.promptLen + 1 + int(runewidth.StringWidth(qs))
-		u.screen.Print(PrintArgs{
-			X:    posX,
-			Y:    location,
-			Fg:   fg | termbox.AttrReverse,
-			Bg:   bg | termbox.AttrReverse,
-			Msg:  " ",
-			Fill: false,
-		})
+		u.screen.Start().
+			X(posX).
+			Y(location).
+			Fg(fg | termbox.AttrReverse).
+			Bg(bg | termbox.AttrReverse).
+			Msg(" ").
+			Print()
 	default:
 		posX = c.Pos()
 		// the caret is in the middle of the string
@@ -177,13 +171,11 @@ func (u UserPrompt) Draw(state *Peco) {
 		}
 		fg := u.styles.Query.fg
 		bg := u.styles.Query.bg
-		u.screen.Print(PrintArgs{
-			X:    u.promptLen + prev + 1,
-			Y:    location,
-			Fg:   fg,
-			Bg:   bg,
-			Fill: true,
-		})
+		u.screen.Start().
+			X(u.promptLen + prev + 1).
+			Y(location).Fg(fg).Bg(bg).
+			Fill(true).
+			Print()
 	}
 
 	u.screen.SetCursor(posX, location)
@@ -192,13 +184,13 @@ func (u UserPrompt) Draw(state *Peco) {
 
 	loc := state.Location()
 	pmsg := fmt.Sprintf("%s [%d (%d/%d)]", state.Filters().Current().String(), loc.Total(), loc.Page(), loc.MaxPage())
-	u.screen.Print(PrintArgs{
-		X:   int(width - runewidth.StringWidth(pmsg)),
-		Y:   location,
-		Fg:  u.styles.Basic.fg,
-		Bg:  u.styles.Basic.bg,
-		Msg: pmsg,
-	})
+	u.screen.Start().
+		X(int(width - runewidth.StringWidth(pmsg))).
+		Y(location).
+		Fg(u.styles.Basic.fg).
+		Bg(u.styles.Basic.bg).
+		Msg(pmsg).
+		Print()
 
 	u.screen.Flush()
 }
@@ -231,7 +223,7 @@ func (s *StatusBar) setClearTimer(t *time.Timer) {
 // timer created by ClearStatus()
 func (s *StatusBar) PrintStatus(msg string, clearDelay time.Duration) {
 	if pdebug.Enabled {
-		g := pdebug.Marker("StatusBar.PrintStatus")
+		g := pdebug.Marker(context.TODO(), "StatusBar.PrintStatus")
 		defer g.End()
 	}
 
@@ -259,22 +251,22 @@ func (s *StatusBar) PrintStatus(msg string, clearDelay time.Duration) {
 	bgAttr := s.styles.Basic.bg
 
 	if w > width {
-		s.screen.Print(PrintArgs{
-			Y:   location,
-			Fg:  fgAttr,
-			Bg:  bgAttr,
-			Msg: string(pad),
-		})
+		s.screen.Start().
+			Y(location).
+			Fg(fgAttr).
+			Bg(bgAttr).
+			Msg(string(pad)).
+			Print()
 	}
 
 	if width > 0 {
-		s.screen.Print(PrintArgs{
-			X:   int(w - width),
-			Y:   location,
-			Fg:  fgAttr | termbox.AttrReverse | termbox.AttrBold | termbox.AttrReverse,
-			Bg:  bgAttr | termbox.AttrReverse,
-			Msg: msg,
-		})
+		s.screen.Start().
+			X(int(w - width)).
+			Y(location).
+			Fg(fgAttr | termbox.AttrReverse | termbox.AttrBold | termbox.AttrReverse).
+			Bg(bgAttr | termbox.AttrReverse).
+			Msg(msg).
+			Print()
 	}
 	s.screen.Flush()
 
@@ -310,7 +302,7 @@ func (l *ListArea) SetDirty(dirty bool) {
 	l.dirty = dirty
 }
 
-func selectionContains(state *Peco, n int) bool {
+func selectionContains(state State, n int) bool {
 	if l, err := state.CurrentLineBuffer().LineAt(n); err == nil {
 		return state.Selection().Has(l)
 	}
@@ -323,9 +315,20 @@ type DrawOptions struct {
 }
 
 // Draw displays the ListArea on the screen
-func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOptions) {
+func (l *ListArea) Draw(ctx context.Context, state State, parent Layout, perPage int, options ...Option) {
+	runningQuery := false
+	lineCache := true
+	for _, option := range options {
+		switch option.Name() {
+		case optkeyLineCache:
+			lineCache = option.Value().(bool)
+		case optkeyRunningQuery:
+			runningQuery = option.Value().(bool)
+		}
+	}
+
 	if pdebug.Enabled {
-		g := pdebug.Marker("ListArea.Draw pp = %d, options = %#v", perPage, options)
+		g := pdebug.Marker(ctx, "ListArea.Draw pp = %d, running query = %#v, line cache = %#v", perPage, runningQuery, lineCache)
 		defer g.End()
 	}
 
@@ -342,7 +345,7 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 	// makes sure that we never have an empty screen when we are
 	// at a large enough page, but we don't have enough entries
 	// to fill that many pages in the buffer
-	if options != nil && options.RunningQuery {
+	if runningQuery {
 		bufsiz := linebuf.Size()
 		page := loc.Page()
 
@@ -356,15 +359,14 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 		}
 		if loc.Page() != page {
 			loc.SetPage(page)
-			parent.DrawPrompt(state)
+			parent.DrawPrompt(ctx, state)
 		}
 	}
 
-	pf := loc.PageCrop()
 	if pdebug.Enabled {
-		pdebug.Printf("Cropping linebuf which contains %d lines at page %d (%d entries per page)", linebuf.Size(), pf.currentPage, pf.perPage)
+		pdebug.Printf(context.TODO(), "Cropping linebuf which contains %d lines at page %d (%d entries per page)", linebuf.Size(), loc.Page(), loc.PerPage())
 	}
-	buf := pf.Crop(linebuf)
+	buf := buffer.Crop(linebuf, loc)
 	bufsiz := buf.Size()
 
 	// This protects us from losing the selected line in case our selected
@@ -376,7 +378,7 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 	// The max column size is calculated by buf. we check against where the
 	// loc variable thinks we should be scrolling to, and make sure that this
 	// falls in range with what we got
-	width, _ := state.screen.Size()
+	width, _ := state.Screen().Size()
 	if max := maxOf(buf.MaxColumn()-width, 0); loc.Column() > max {
 		loc.SetColumn(max)
 	}
@@ -397,7 +399,7 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 	// If our buffer is smaller than perPage, we may need to
 	// clear some lines
 	if pdebug.Enabled {
-		pdebug.Printf("ListArea.Draw: buffer size is %d, our view area is %d", bufsiz, perPage)
+		pdebug.Printf(context.TODO(), "ListArea.Draw: buffer size is %d, our view area is %d", bufsiz, perPage)
 	}
 
 	for n := bufsiz; n < perPage; n++ {
@@ -407,17 +409,17 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 			y = start - n
 		}
 
-		l.screen.Print(PrintArgs{
-			Y:    y,
-			Fg:   l.styles.Basic.fg,
-			Bg:   l.styles.Basic.bg,
-			Fill: true,
-		})
+		l.screen.Start().
+			Y(y).
+			Fg(l.styles.Basic.fg).
+			Bg(l.styles.Basic.bg).
+			Fill(true).
+			Print()
 	}
 
 	var cached, written int
 	var fgAttr, bgAttr termbox.Attribute
-	var selectionPrefix = state.selectionPrefix
+	var selectionPrefix = state.SelectionPrefix()
 	var prefix = ""
 
 	var prefixCurrentSelection string
@@ -468,7 +470,7 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 			break
 		}
 
-		if (options != nil && options.DisableCache) || l.IsDirty() || target.IsDirty() {
+		if !lineCache || l.IsDirty() || target.IsDirty() {
 			target.SetDirty(false)
 		} else if l.displayCache[n] == target {
 			cached++
@@ -483,44 +485,44 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 		line := target.DisplayString()
 
 		if len := len(prefix); len > 0 {
-			l.screen.Print(PrintArgs{
-				X:       x,
-				Y:       y,
-				XOffset: xOffset,
-				Fg:      fgAttr,
-				Bg:      bgAttr,
-				Msg:     prefix,
-			})
+			l.screen.Start().
+				X(x).
+				Y(y).
+				XOffset(xOffset).
+				Fg(fgAttr).
+				Bg(bgAttr).
+				Msg(prefix).
+				Print()
 			x += len
 		}
 		if state.SingleKeyJumpMode() || state.SingleKeyJumpShowPrefix() {
 			prefixes := state.SingleKeyJumpPrefixes()
 			if n < int(len(prefixes)) {
-				l.screen.Print(PrintArgs{
-					X:       x,
-					Y:       y,
-					XOffset: xOffset,
-					Fg:      fgAttr | termbox.AttrBold | termbox.AttrReverse,
-					Bg:      bgAttr,
-					Msg:     string(prefixes[n]),
-				})
-				l.screen.Print(PrintArgs{
-					X:       x + 1,
-					Y:       y,
-					XOffset: xOffset,
-					Fg:      fgAttr,
-					Bg:      bgAttr,
-					Msg:     " ",
-				})
+				l.screen.Start().
+					X(x).
+					Y(y).
+					XOffset(xOffset).
+					Fg(fgAttr | termbox.AttrBold | termbox.AttrReverse).
+					Bg(bgAttr).
+					Msg(string(prefixes[n])).
+					Print()
+				l.screen.Start().
+					X(x + 1).
+					Y(y).
+					XOffset(xOffset).
+					Fg(fgAttr).
+					Bg(bgAttr).
+					Msg(" ").
+					Print()
 			} else {
-				l.screen.Print(PrintArgs{
-					X:       x,
-					Y:       y,
-					XOffset: xOffset,
-					Fg:      fgAttr,
-					Bg:      bgAttr,
-					Msg:     "  ",
-				})
+				l.screen.Start().
+					X(x).
+					Y(y).
+					XOffset(xOffset).
+					Fg(fgAttr).
+					Bg(bgAttr).
+					Msg("  ").
+					Print()
 			}
 
 			x += 2
@@ -528,15 +530,15 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 
 		ix, ok := target.(MatchIndexer)
 		if !ok {
-			l.screen.Print(PrintArgs{
-				X:       x,
-				Y:       y,
-				XOffset: xOffset,
-				Fg:      fgAttr,
-				Bg:      bgAttr,
-				Msg:     line,
-				Fill:    true,
-			})
+			l.screen.Start().
+				X(x).
+				Y(y).
+				XOffset(xOffset).
+				Fg(fgAttr).
+				Bg(bgAttr).
+				Msg(line).
+				Fill(true).
+				Print()
 			continue
 		}
 
@@ -547,58 +549,58 @@ func (l *ListArea) Draw(state *Peco, parent Layout, perPage int, options *DrawOp
 		for _, m := range matches {
 			if m[0] > index {
 				c := line[index:m[0]]
-				n := l.screen.Print(PrintArgs{
-					X:       prev,
-					Y:       y,
-					XOffset: xOffset,
-					Fg:      fgAttr,
-					Bg:      bgAttr,
-					Msg:     c,
-				})
+				n := l.screen.Start().
+					X(prev).
+					Y(y).
+					XOffset(xOffset).
+					Fg(fgAttr).
+					Bg(bgAttr).
+					Msg(c).
+					Print()
 				prev += n
 				index += len(c)
 			}
 			c := line[m[0]:m[1]]
 
-			n := l.screen.Print(PrintArgs{
-				X:       prev,
-				Y:       y,
-				XOffset: xOffset,
-				Fg:      l.styles.Matched.fg,
-				Bg:      mergeAttribute(bgAttr, l.styles.Matched.bg),
-				Msg:     c,
-				Fill:    true,
-			})
+			n := l.screen.Start().
+				X(prev).
+				Y(y).
+				XOffset(xOffset).
+				Fg(l.styles.Matched.fg).
+				Bg(mergeAttribute(bgAttr, l.styles.Matched.bg)).
+				Msg(c).
+				Fill(true).
+				Print()
 			prev += n
 			index += len(c)
 		}
 
 		m := matches[len(matches)-1]
 		if m[0] > index {
-			l.screen.Print(PrintArgs{
-				X:       prev,
-				Y:       y,
-				XOffset: xOffset,
-				Fg:      l.styles.Query.fg,
-				Bg:      mergeAttribute(bgAttr, l.styles.Query.bg),
-				Msg:     line[m[0]:m[1]],
-				Fill:    true,
-			})
+			l.screen.Start().
+				X(prev).
+				Y(y).
+				XOffset(xOffset).
+				Fg(l.styles.Query.fg).
+				Bg(mergeAttribute(bgAttr, l.styles.Query.bg)).
+				Msg(line[m[0]:m[1]]).
+				Fill(true).
+				Print()
 		} else if len(line) > m[1] {
-			l.screen.Print(PrintArgs{
-				X:       prev,
-				Y:       y,
-				XOffset: xOffset,
-				Fg:      fgAttr,
-				Bg:      bgAttr,
-				Msg:     line[m[1]:len(line)],
-				Fill:    true,
-			})
+			l.screen.Start().
+				X(prev).
+				Y(y).
+				XOffset(xOffset).
+				Fg(fgAttr).
+				Bg(bgAttr).
+				Msg(line[m[1]:]).
+				Fill(true).
+				Print()
 		}
 	}
 	l.SetDirty(false)
 	if pdebug.Enabled {
-		pdebug.Printf("ListArea.Draw: Written total of %d lines (%d cached)", written+cached, cached)
+		pdebug.Printf(context.TODO(), "ListArea.Draw: Written total of %d lines (%d cached)", written+cached, cached)
 	}
 }
 
@@ -610,19 +612,19 @@ func maxOf(a, b int) int {
 }
 
 // NewDefaultLayout creates a new Layout in the default format (top-down)
-func NewDefaultLayout(state *Peco) *BasicLayout {
+func NewDefaultLayout(s Screen, styles *StyleSet, prompt string) *BasicLayout {
 	return &BasicLayout{
-		StatusBar: NewStatusBar(state.Screen(), AnchorBottom, 0+extraOffset, state.Styles()),
+		StatusBar: NewStatusBar(s, AnchorBottom, 0+extraOffset, styles),
 		// The prompt is at the top
-		prompt: NewUserPrompt(state.Screen(), AnchorTop, 0, state.Prompt(), state.Styles()),
+		prompt: NewUserPrompt(s, AnchorTop, 0, prompt, styles),
 		// The list area is at the top, after the prompt
 		// It's also displayed top-to-bottom order
-		list: NewListArea(state.Screen(), AnchorTop, 1, true, state.Styles()),
+		list: NewListArea(s, AnchorTop, 1, true, styles),
 	}
 }
 
 // NewBottomUpLayout creates a new Layout in bottom-up format
-func NewBottomUpLayout(state *Peco) *BasicLayout {
+func NewBottomUpLayout(state State) *BasicLayout {
 	return &BasicLayout{
 		StatusBar: NewStatusBar(state.Screen(), AnchorBottom, 0+extraOffset, state.Styles()),
 		// The prompt is at the bottom, above the status bar
@@ -638,9 +640,9 @@ func (l *BasicLayout) PurgeDisplayCache() {
 }
 
 // CalculatePage calculates which page we're displaying
-func (l *BasicLayout) CalculatePage(state *Peco, perPage int) error {
+func (l *BasicLayout) CalculatePage(ctx context.Context, state State, perPage int) error {
 	if pdebug.Enabled {
-		g := pdebug.Marker("BasicLayout.Calculate %d", perPage)
+		g := pdebug.Marker(ctx, "BasicLayout.Calculate %d", perPage)
 		defer g.End()
 	}
 	buf := state.CurrentLineBuffer()
@@ -668,25 +670,25 @@ func (l *BasicLayout) CalculatePage(state *Peco, perPage int) error {
 }
 
 // DrawPrompt draws the prompt to the terminal
-func (l *BasicLayout) DrawPrompt(state *Peco) {
-	l.prompt.Draw(state)
+func (l *BasicLayout) DrawPrompt(ctx context.Context, state State) {
+	l.prompt.Draw(ctx, state)
 }
 
 // DrawScreen draws the entire screen
-func (l *BasicLayout) DrawScreen(state *Peco, options *DrawOptions) {
+func (l *BasicLayout) DrawScreen(ctx context.Context, state State, options ...Option) {
 	if pdebug.Enabled {
-		g := pdebug.Marker("BasicLayout.DrawScreen")
+		g := pdebug.Marker(ctx, "BasicLayout.DrawScreen")
 		defer g.End()
 	}
 
 	perPage := l.linesPerPage()
 
-	if err := l.CalculatePage(state, perPage); err != nil {
+	if err := l.CalculatePage(ctx, state, perPage); err != nil {
 		return
 	}
 
-	l.DrawPrompt(state)
-	l.list.Draw(state, l, perPage, options)
+	l.DrawPrompt(ctx, state)
+	l.list.Draw(ctx, state, l, perPage, options...)
 
 	if err := l.screen.Flush(); err != nil {
 		return
@@ -706,6 +708,7 @@ func (l *BasicLayout) linesPerPage() int {
 		// means no space left to draw anything
 		if pdebug.Enabled {
 			pdebug.Printf(
+				context.TODO(),
 				"linesPerPage is < 1 (height = %d, reservedLines = %d), forcing return value of 2",
 				height,
 				reservedLines,
@@ -717,10 +720,10 @@ func (l *BasicLayout) linesPerPage() int {
 }
 
 // MovePage scrolls the screen
-func (l *BasicLayout) MovePage(state *Peco, p PagingRequest) (moved bool) {
+func (l *BasicLayout) MovePage(state State, p PagingRequest) (moved bool) {
 	switch p.Type() {
 	case ToScrollLeft, ToScrollRight:
-		moved = horizontalScroll(state, l, p)
+		moved = horizontalScroll(state.Screen(), state.Location(), l, p)
 	default:
 		moved = verticalScroll(state, l, p)
 	}
@@ -728,7 +731,7 @@ func (l *BasicLayout) MovePage(state *Peco, p PagingRequest) (moved bool) {
 }
 
 // verticalScroll moves the cursor position vertically
-func verticalScroll(state *Peco, l *BasicLayout, p PagingRequest) bool {
+func verticalScroll(state State, l *BasicLayout, p PagingRequest) bool {
 	// Before we move, on which line were we located?
 	loc := state.Location()
 	lineBefore := loc.LineNumber()
@@ -736,7 +739,7 @@ func verticalScroll(state *Peco, l *BasicLayout, p PagingRequest) bool {
 
 	if pdebug.Enabled {
 		defer func() {
-			pdebug.Printf("currentLine changed from %d -> %d", lineBefore, state.Location().LineNumber())
+			pdebug.Printf(context.TODO(), "currentLine changed from %d -> %d", lineBefore, loc.LineNumber())
 		}()
 	}
 
@@ -858,9 +861,8 @@ func verticalScroll(state *Peco, l *BasicLayout, p PagingRequest) bool {
 }
 
 // horizontalScroll scrolls screen horizontal
-func horizontalScroll(state *Peco, l *BasicLayout, p PagingRequest) bool {
-	width, _ := state.screen.Size()
-	loc := state.Location()
+func horizontalScroll(s Screen, loc *location.Location, l *BasicLayout, p PagingRequest) bool {
+	width, _ := s.Size()
 	if p.Type() == ToScrollRight {
 		loc.SetColumn(loc.Column() + width/2)
 	} else if loc.Column() > 0 {

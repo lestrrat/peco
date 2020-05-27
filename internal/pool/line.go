@@ -1,4 +1,4 @@
-package buffer
+package pool
 
 import (
 	"sync"
@@ -19,6 +19,7 @@ func ReleaseLineListBuf(l []line.Line) {
 		return
 	}
 	l = l[0:0]
+	//nolint:staticcheck // no, really. this is fine
 	lineListPool.Put(l)
 }
 

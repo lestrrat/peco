@@ -1,13 +1,14 @@
-package peco
+package ui_test
 
 import (
 	"testing"
 
 	"github.com/peco/peco/line"
+	"github.com/peco/peco/ui"
 )
 
 func TestSelection(t *testing.T) {
-	s := NewSelection()
+	s := ui.NewSelection()
 
 	var i uint64 = 0
 	alice := line.NewRaw(i, "Alice", false)
@@ -17,7 +18,7 @@ func TestSelection(t *testing.T) {
 		t.Errorf("expected Len = 1, got %d", s.Len())
 	}
 	s.Add(line.NewRaw(i, "Bob", false))
-	i++
+
 	if s.Len() != 2 {
 		t.Errorf("expected Len = 2, got %d", s.Len())
 	}

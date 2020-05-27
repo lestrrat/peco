@@ -33,10 +33,6 @@ func StripANSISequence(s string) string {
 	return reANSIEscapeChars.ReplaceAllString(s, "")
 }
 
-type causer interface {
-	Cause() error
-}
-
 type ignorable interface {
 	Ignorable() bool
 }
@@ -49,44 +45,83 @@ type exitStatuser interface {
 	ExitStatus() int
 }
 
-func IsIgnorableError(err error) bool {
-	for e := err; e != nil; {
-		switch e.(type) {
+type causer interface {
+	Cause() error
+}
+
+func IsIgnorableError(e error) bool {
+	// Obviously, errors are ignoreable if they are initially nil
+	if e == nil {
+		return true
+	}
+
+	var prev error
+	for e != nil {
+		switch v := e.(type) {
 		case ignorable:
-			return e.(ignorable).Ignorable()
-		case causer:
-			e = e.(causer).Cause()
+			return v.Ignorable()
 		default:
-			return false
+			if v, ok := e.(causer); ok {
+				e = v.Cause()
+			}
+
+			if prev == e {
+				break
+			}
 		}
+
+		prev = e
 	}
 	return false
 }
 
-func IsCollectResultsError(err error) bool {
-	for e := err; e != nil; {
-		switch e.(type) {
+func IsCollectResultsError(e error) bool {
+	if e == nil {
+		return false
+	}
+
+	var prev error
+	for e != nil {
+		switch v := e.(type) {
 		case collectResults:
-			return e.(collectResults).CollectResults()
-		case causer:
-			e = e.(causer).Cause()
+			return v.CollectResults()
 		default:
-			return false
+			if v, ok := e.(causer); ok {
+				e = v.Cause()
+			}
+
+			if prev == e {
+				break
+			}
 		}
+
+		prev = e
 	}
 	return false
 }
 
-func GetExitStatus(err error) (int, bool) {
-	for e := err; e != nil; {
-		if ese, ok := e.(exitStatuser); ok {
-			return ese.ExitStatus(), true
-		}
-		if cerr, ok := e.(causer); ok {
-			e = cerr.Cause()
-			continue
-		}
-		break
+func GetExitStatus(e error) (int, bool) {
+	if e == nil {
+		return 1, false
 	}
+
+	var prev error
+	for e != nil {
+		switch v := e.(type) {
+		case exitStatuser:
+			return v.ExitStatus(), true
+		default:
+			if v, ok := e.(causer); ok {
+				e = v.Cause()
+			}
+
+			if prev == e {
+				break
+			}
+		}
+
+		prev = e
+	}
+
 	return 1, false
 }

@@ -5,7 +5,7 @@ import (
 
 	"context"
 
-	"github.com/lestrrat-go/pdebug"
+	"github.com/lestrrat-go/pdebug/v2"
 	"github.com/nsf/termbox-go"
 )
 
@@ -34,7 +34,7 @@ func (i *Input) Loop(ctx context.Context, cancel func()) error {
 
 func (i *Input) handleInputEvent(ctx context.Context, ev termbox.Event) error {
 	if pdebug.Enabled {
-		g := pdebug.Marker("event received from user: %#v", ev)
+		g := pdebug.Marker(ctx, "event received from user: %#v", ev)
 		defer g.End()
 	}
 
@@ -61,7 +61,7 @@ func (i *Input) handleInputEvent(ctx context.Context, ev termbox.Event) error {
 				m.Lock()
 				i.mod = nil
 				m.Unlock()
-				i.state.Keymap().ExecuteAction(ctx, i.state, tmp)
+				_ = i.state.Keymap().ExecuteAction(ctx, i.state, tmp)
 			})
 			m.Unlock()
 			return nil
@@ -78,9 +78,7 @@ func (i *Input) handleInputEvent(ctx context.Context, ev termbox.Event) error {
 		}
 		m.Unlock()
 
-		i.state.Keymap().ExecuteAction(ctx, i.state, ev)
-
-		return nil
+		return i.state.Keymap().ExecuteAction(ctx, i.state, ev)
 	}
 
 	return nil

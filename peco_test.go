@@ -6,17 +6,18 @@ import (
 	"io"
 	"io/ioutil"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 
 	"context"
 
-	"github.com/lestrrat-go/pdebug"
+	"github.com/lestrrat-go/pdebug/v2"
 	"github.com/nsf/termbox-go"
 	"github.com/peco/peco/hub"
+	"github.com/peco/peco/internal/mock"
 	"github.com/peco/peco/internal/util"
 	"github.com/peco/peco/line"
+	"github.com/peco/peco/ui"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,45 +35,13 @@ func (h nullHub) SendStatusMsg(_ context.Context, _ string)                     
 func (h nullHub) SendStatusMsgAndClear(_ context.Context, _ string, _ time.Duration) {}
 func (h nullHub) StatusMsgCh() chan hub.Payload                                      { return nil }
 
-type interceptorArgs []interface{}
-type interceptor struct {
-	m      sync.Mutex
-	events map[string][]interceptorArgs
-}
-
-func newInterceptor() *interceptor {
-	return &interceptor{
-		events: make(map[string][]interceptorArgs),
-	}
-}
-
-func (i *interceptor) reset() {
-	i.m.Lock()
-	defer i.m.Unlock()
-
-	i.events = make(map[string][]interceptorArgs)
-}
-
-func (i *interceptor) record(name string, args []interface{}) {
-	i.m.Lock()
-	defer i.m.Unlock()
-
-	events := i.events
-	v, ok := events[name]
-	if !ok {
-		v = []interceptorArgs{}
-	}
-
-	events[name] = append(v, interceptorArgs(args))
-}
-
 func newConfig(s string) (string, error) {
 	f, err := ioutil.TempFile("", "peco-test-config-")
 	if err != nil {
 		return "", err
 	}
 
-	io.WriteString(f, s)
+	_, _ = io.WriteString(f, s)
 	f.Close()
 	return f.Name(), nil
 }
@@ -81,68 +50,10 @@ func newPeco() *Peco {
 	_, file, _, _ := runtime.Caller(0)
 	state := New()
 	state.Argv = []string{"peco", file}
-	state.screen = NewDummyScreen()
+	state.screen = mock.NewScreen()
 	state.skipReadConfig = true
 	return state
 }
-
-type dummyScreen struct {
-	*interceptor
-	width  int
-	height int
-	pollCh chan termbox.Event
-}
-
-func NewDummyScreen() *dummyScreen {
-	return &dummyScreen{
-		interceptor: newInterceptor(),
-		width:       80,
-		height:      10,
-		pollCh:      make(chan termbox.Event),
-	}
-}
-
-func (d dummyScreen) SetCursor(_, _ int) {
-}
-
-func (d dummyScreen) Init() error {
-	return nil
-}
-
-func (d dummyScreen) Close() error {
-	return nil
-}
-
-func (d dummyScreen) Print(args PrintArgs) int {
-	return screenPrint(d, args)
-}
-
-func (d dummyScreen) SendEvent(e termbox.Event) {
-	// XXX FIXME SendEvent should receive a context
-	t := time.NewTimer(time.Second)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		panic("timed out sending an event")
-	case d.pollCh <- e:
-	}
-}
-
-func (d dummyScreen) SetCell(x, y int, ch rune, fg, bg termbox.Attribute) {
-	d.record("SetCell", interceptorArgs{x, y, ch, fg, bg})
-}
-func (d dummyScreen) Flush() error {
-	d.record("Flush", interceptorArgs{})
-	return nil
-}
-func (d dummyScreen) PollEvent(ctx context.Context) chan termbox.Event {
-	return d.pollCh
-}
-func (d dummyScreen) Size() (int, int) {
-	return d.width, d.height
-}
-func (d dummyScreen) Resume()  {}
-func (d dummyScreen) Suspend() {}
 
 func TestIDGen(t *testing.T) {
 	idgen := newIDGen()
@@ -155,7 +66,7 @@ func TestIDGen(t *testing.T) {
 		lines = append(lines, line.NewRaw(idgen.Next(), fmt.Sprintf("%d", i), false))
 	}
 
-	sel := NewSelection()
+	sel := ui.NewSelection()
 	for _, l := range lines {
 		if sel.Has(l) {
 			t.Errorf("Collision detected %d", l.ID())
@@ -173,23 +84,96 @@ func TestPeco(t *testing.T) {
 	}
 }
 
-type testCauser interface {
-	Cause() error
-}
-type testIgnorableError interface {
-	Ignorable() bool
+func TestPecoCancel(t *testing.T) {
+	done := make(chan struct{})
+
+	// This whole operation may block, so run the test in the background
+	go func() {
+		defer close(done)
+		p := newPeco()
+
+		p.Argv = []string{"peco"}
+
+		buf := &bytes.Buffer{}
+		buf.WriteString("foo\nbar\nbaz")
+		p.Stdin = buf
+		p.Stdout = &bytes.Buffer{}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		resultCh := make(chan error)
+		go func() {
+			defer close(resultCh)
+			select {
+			case <-ctx.Done():
+				return
+			case resultCh <- p.Run(ctx):
+				return
+			}
+		}()
+
+		<-p.Ready()
+
+		var fired bool
+		time.AfterFunc(200*time.Millisecond, func() {
+			p.screen.SendEvent(termbox.Event{Key: termbox.KeyEsc})
+			fired = true
+		})
+
+		select {
+		case <-ctx.Done():
+			t.Errorf("timeout reached")
+			return
+		case err := <-resultCh:
+			if !assert.True(t, util.IsIgnorableError(err), "error should be ignorable: %s", err) {
+				return
+			}
+			p.PrintResults()
+		}
+
+		if !assert.True(t, fired, `SendEvent should have fired`) {
+			return
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Errorf(`background test did not return in time`)
+	case <-done:
+	}
 }
 
 func TestPecoHelp(t *testing.T) {
-	p := newPeco()
-	p.Argv = []string{"peco", "-h"}
-	p.Stdout = &bytes.Buffer{}
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(time.Second, cancel)
+	done := make(chan struct{})
 
-	err := p.Run(ctx)
-	if !assert.True(t, util.IsIgnorableError(err), "p.Run() should return error with Ignorable() method, and it should return true") {
-		return
+	// This whole operation may block, so run the test in the background
+	go func() {
+		defer close(done)
+		p := newPeco()
+
+		p.Argv = []string{"peco", "-h"}
+		p.Stdout = &bytes.Buffer{}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		err := p.Run(ctx)
+		if !assert.True(t, util.IsIgnorableError(err), "p.Run() should return error with Ignorable() method, and it should return true") {
+			return
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Errorf(`background test did not return in time`)
+	case <-done:
 	}
 }
 
@@ -202,7 +186,7 @@ func TestGHIssue331(t *testing.T) {
 	time.AfterFunc(time.Second, cancel)
 
 	p := newPeco()
-	p.Run(ctx)
+	_ = p.Run(ctx)
 
 	if !assert.NotEmpty(t, p.singleKeyJumpPrefixes, "singleKeyJumpPrefixes is not empty") {
 		return
@@ -295,7 +279,7 @@ func TestApplyConfig(t *testing.T) {
 // The test should have caught the bug for 376, but the premise of the test
 // itself was wrong
 func TestGHIssue363(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(pdebug.Context(context.Background()), time.Second)
 	defer cancel()
 
 	p := newPeco()
@@ -363,7 +347,7 @@ func TestGHIssue367(t *testing.T) {
 		p = p[:l]
 		src = src[1:]
 		if pdebug.Enabled {
-			pdebug.Printf("reader func returning %#v", string(p))
+			pdebug.Printf(ctx, "reader func returning %#v", string(p))
 		}
 		return l, nil
 	})
@@ -373,7 +357,7 @@ func TestGHIssue367(t *testing.T) {
 	waitCh := make(chan struct{})
 	go func() {
 		defer close(waitCh)
-		p.Run(ctx)
+		_ = p.Run(ctx)
 	}()
 
 	select {

@@ -7,7 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lestrrat-go/pdebug"
+	"github.com/lestrrat-go/pdebug/v2"
+	"github.com/peco/peco/buffer"
 	"github.com/peco/peco/internal/util"
 	"github.com/peco/peco/line"
 	"github.com/peco/peco/pipeline"
@@ -88,7 +89,7 @@ func (s *Source) Setup(ctx context.Context, state *Peco) {
 		defer notify.Do(notifycb)
 
 		if pdebug.Enabled {
-			pdebug.Printf("Source: using buffer size of %dkb", state.maxScanBufferSize)
+			pdebug.Printf(ctx, "Source: using buffer size of %dkb", state.maxScanBufferSize)
 		}
 		scanbuf := make([]byte, state.maxScanBufferSize*1024)
 		scanner := bufio.NewScanner(s.in)
@@ -107,7 +108,7 @@ func (s *Source) Setup(ctx context.Context, state *Peco) {
 		go func() {
 			var scanned int
 			if pdebug.Enabled {
-				defer func() { pdebug.Printf("Source scanned %d lines", scanned) }()
+				defer func() { pdebug.Printf(ctx, "Source scanned %d lines", scanned) }()
 			}
 
 			defer close(lines)
@@ -116,7 +117,7 @@ func (s *Source) Setup(ctx context.Context, state *Peco) {
 				select {
 				case <-ctx.Done():
 					if pdebug.Enabled {
-						pdebug.Printf("Bailing out of source setup text reader loop, because ctx was canceled")
+						pdebug.Printf(ctx, "Bailing out of source setup text reader loop, because ctx was canceled")
 					}
 					return
 				case lines <- newLine:
@@ -132,13 +133,13 @@ func (s *Source) Setup(ctx context.Context, state *Peco) {
 			select {
 			case <-ctx.Done():
 				if pdebug.Enabled {
-					pdebug.Printf("Bailing out of source setup, because ctx was canceled")
+					pdebug.Printf(ctx, "Bailing out of source setup, because ctx was canceled")
 				}
 				return
 			case l, ok := <-lines:
 				if !ok {
 					if pdebug.Enabled {
-						pdebug.Printf("No more lines to read...")
+						pdebug.Printf(ctx, "No more lines to read...")
 					}
 					loop = false
 					break
@@ -151,7 +152,7 @@ func (s *Source) Setup(ctx context.Context, state *Peco) {
 		}
 
 		if pdebug.Enabled {
-			pdebug.Printf("Read all %d lines from source", readCount)
+			pdebug.Printf(ctx, "Read all %d lines from source", readCount)
 		}
 	})
 }
@@ -161,11 +162,11 @@ func (s *Source) Start(ctx context.Context, out pipeline.ChanOutput) {
 	var sent int
 	// I should be the only one running this method until I bail out
 	if pdebug.Enabled {
-		g := pdebug.Marker("Source.Start (%d lines in buffer)", len(s.lines))
+		g := pdebug.Marker(ctx, "Source.Start (%d lines in buffer)", len(s.lines))
 		defer g.End()
-		defer func() { pdebug.Printf("Source sent %d lines", sent) }()
+		defer func() { pdebug.Printf(ctx, "Source sent %d lines", sent) }()
 	}
-	defer out.SendEndMark("end of input")
+	defer func() { _ = out.SendEndMark("end of input") }()
 
 	var resume bool
 	select {
@@ -180,11 +181,11 @@ func (s *Source) Start(ctx context.Context, out pipeline.ChanOutput) {
 			select {
 			case <-ctx.Done():
 				if pdebug.Enabled {
-					pdebug.Printf("Source: context.Done detected")
+					pdebug.Printf(ctx, "Source: context.Done detected")
 				}
 				return
 			default:
-				out.Send(l)
+				_ = out.Send(l)
 				sent++
 			}
 		}
@@ -210,12 +211,12 @@ func (s *Source) Start(ctx context.Context, out pipeline.ChanOutput) {
 			select {
 			case <-ctx.Done():
 				if pdebug.Enabled {
-					pdebug.Printf("Source: context.Done detected")
+					pdebug.Printf(ctx, "Source: context.Done detected")
 				}
 				return
 			default:
 				l, _ := s.LineAt(i)
-				out.Send(l)
+				_ = out.Send(l)
 				sent++
 			}
 		}
@@ -236,7 +237,7 @@ func (s *Source) Start(ctx context.Context, out pipeline.ChanOutput) {
 // is ready to feed the filters
 func (s *Source) Reset() {
 	if pdebug.Enabled {
-		g := pdebug.Marker("Source.Reset")
+		g := pdebug.Marker(context.TODO(), "Source.Reset")
 		defer g.End()
 	}
 	s.ChanOutput = pipeline.ChanOutput(make(chan interface{}))
@@ -254,7 +255,7 @@ func (s *Source) SetupDone() <-chan struct{} {
 	return s.setupDone
 }
 
-func (s *Source) linesInRange(start, end int) []line.Line {
+func (s *Source) LinesInRange(start, end int) []line.Line {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	return s.lines[start:end]
@@ -263,13 +264,13 @@ func (s *Source) linesInRange(start, end int) []line.Line {
 func (s *Source) LineAt(n int) (line.Line, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	return bufferLineAt(s.lines, n)
+	return buffer.LineAt(s.lines, n)
 }
 
 func (s *Source) Size() int {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	return bufferSize(s.lines)
+	return len(s.lines)
 }
 
 func (s *Source) Append(l line.Line) {

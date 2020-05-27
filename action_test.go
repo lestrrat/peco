@@ -9,6 +9,8 @@ import (
 
 	"github.com/nsf/termbox-go"
 	"github.com/peco/peco/filter"
+	"github.com/peco/peco/query"
+	"github.com/peco/peco/ui"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,7 +19,7 @@ func TestActionFunc(t *testing.T) {
 	af := ActionFunc(func(_ context.Context, _ *Peco, _ termbox.Event) {
 		called++
 	})
-	af.Execute(nil, nil, termbox.Event{})
+	af.Execute(context.TODO(), nil, termbox.Event{})
 	if !assert.Equal(t, called, 1, "Expected ActionFunc to be called once, but it got called %d times", called) {
 		return
 	}
@@ -56,11 +58,11 @@ func TestActionNames(t *testing.T) {
 	}
 }
 
-func expectCaretPos(t *testing.T, c *Caret, expect int) bool {
+func expectCaretPos(t *testing.T, c *ui.Caret, expect int) bool {
 	return assert.Equal(t, expect, c.Pos(), "Expected caret position %d, got %d", expect, c.Pos())
 }
 
-func expectQueryString(t *testing.T, q *Query, expect string) bool {
+func expectQueryString(t *testing.T, q *query.Query, expect string) bool {
 	return assert.Equal(t, expect, q.String(), "Expected '%s', got '%s'", expect, q.String())
 }
 
@@ -70,7 +72,7 @@ func TestDoDeleteForwardChar(t *testing.T) {
 	c := state.Caret()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
@@ -106,7 +108,7 @@ func TestDoDeleteForwardWord(t *testing.T) {
 	c := state.Caret()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
@@ -162,7 +164,7 @@ func TestDoDeleteBackwardChar(t *testing.T) {
 	c := state.Caret()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
@@ -194,7 +196,7 @@ func TestDoDeleteBackwardWord(t *testing.T) {
 	c := state.Caret()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
@@ -233,7 +235,7 @@ func TestDoDeleteBackwardWord(t *testing.T) {
 	}
 }
 
-func writeQueryToPrompt(t *testing.T, screen Screen, message string) {
+func writeQueryToPrompt(t *testing.T, screen ui.Screen, message string) {
 	for str := message; true; {
 		r, size := utf8.DecodeRuneInString(str)
 		if r == utf8.RuneError {
@@ -254,7 +256,7 @@ func TestDoAcceptChar(t *testing.T) {
 	state := newPeco()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
@@ -282,7 +284,7 @@ func TestRotateFilter(t *testing.T) {
 	state := newPeco()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
@@ -318,7 +320,7 @@ func TestBeginningOfLineAndEndOfLine(t *testing.T) {
 	state := newPeco()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
@@ -345,7 +347,7 @@ func TestBackToInitialFilter(t *testing.T) {
 	state := newPeco()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go state.Run(ctx)
+	go func() { _ = state.Run(ctx) }()
 	defer cancel()
 
 	<-state.Ready()
